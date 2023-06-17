@@ -22,32 +22,58 @@ def txt_to_label(txt_path: str) -> Dict[str, int]:
     return label_to_idx
 
 
-def gen_ori_img(anno: dict) -> np.ndarray:
+def gen_ori_img(
+    anno: dict,
+    target_shape: Tuple[int,
+                        int]) -> Tuple[np.ndarray, int, int, int, int, float]:
 
+    # 1. Base64 轉圖片
     img_base64 = anno.get('imageData')
     img = base64_to_img(img_base64)
 
-    return img
+    # 2. 計算新的圖片尺寸比例
+    h, w, _ = img.shape
+    w_target, h_target = target_shape
+
+    h_ratio = h_target / h
+    w_ratio = w_target / w
+    ratio = min(h_ratio, w_ratio)
+
+    new_h = int(h * ratio)
+    new_w = int(w * ratio)
+
+    # 3. 縮放圖片
+    img_resize = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_AREA)
+
+    # 4. 計算邊界
+    top = int((h_target - new_h) / 2)
+    bottom = h_target - new_h - top
+    left = int((w_target - new_w) / 2)
+    right = w_target - new_w - left
+
+    # 5. 填充邊界影像
+    img_filled = cv2.copyMakeBorder(img_resize,
+                                    top,
+                                    bottom,
+                                    left,
+                                    right,
+                                    cv2.BORDER_CONSTANT,
+                                    value=(127, 127, 127))
+
+    return img_filled, top, bottom, left, right, ratio
 
 
-def gen_mask(anno: dict, label_to_idx: Dict[str, int], same_size: bool,
-             target_shape: Tuple[int, int]) -> np.ndarray:
+def gen_mask(anno: dict, label_to_idx: Dict[str, int],
+             target_shape: Tuple[int, int], top: int, left: int,
+             ratio: float) -> np.ndarray:
 
     # 1. 取得圖片尺寸
     height = anno.get('imageHeight')
     width = anno.get('imageWidth')
 
-    # 2. 計算新的圖片尺寸比例
-    new_width, new_height = target_shape
-    h_ratio = 1.0
-    w_ratio = 1.0
-    if same_size:
-        h_ratio = new_height / height
-        w_ratio = new_width / width
-
-    # 3. 產生Mask
+    # 2. 產生Mask
     # 產生空白影像
-    mask = np.zeros((new_height, new_width, 1), np.uint8)
+    mask = np.zeros((target_shape[1], target_shape[0], 1), np.uint8)
 
     # 繪製標記資料(實心填充輪廓)
     shapes = anno.get('shapes')
@@ -56,14 +82,17 @@ def gen_mask(anno: dict, label_to_idx: Dict[str, int], same_size: bool,
         # 取得標籤索引
         label = shape.get('label')
         label_idx = label_to_idx.get(label) or DEFAULT_IDX
+        # label_idx = 255
 
         # 取得輪廓座標點
         points = shape.get('points')
         resize_points: List[List[float, float]] = list()
         for point in points:
+
+            # 計算新的座標點
             x, y = point
-            x = x * w_ratio
-            y = y * h_ratio
+            x = (x * ratio) + left
+            y = (y * ratio) + top
             resize_points.append([x, y])
 
         # 繪製輪廓
@@ -78,8 +107,7 @@ def anno_to_mask(
     label_path: str,
     out_img_dir: str,
     out_mask_dir: str,
-    same_size: bool = True,
-    target_shape: Tuple[int, int] = (1280, 960)) -> None:
+    target_shape: Tuple[int, int] = (512, 512)) -> None:
 
     # 1. 搜尋檔案路徑
     anno_paths = Path(anno_dir).rglob('*.json')
@@ -96,16 +124,13 @@ def anno_to_mask(
             continue
 
         # 原始照片
-        img_ori = gen_ori_img(anno)
-        if same_size:
-            img_ori = cv2.resize(img_ori,
-                                 target_shape,
-                                 interpolation=cv2.INTER_AREA)
+        img_filled, top, bottom, left, right, ratio = gen_ori_img(
+            anno, target_shape)
         img_spath = Path(out_img_dir, f'{anno_path.stem}.jpg')
-        save_img(img_ori, img_spath)
+        save_img(img_filled, img_spath)
 
         # Mask
-        mask = gen_mask(anno, label_to_idx, same_size, target_shape)
+        mask = gen_mask(anno, label_to_idx, target_shape, top, left, ratio)
         mask_spath = Path(out_mask_dir, f'{anno_path.stem}_mask.png')
         save_img(mask, mask_spath)
 
