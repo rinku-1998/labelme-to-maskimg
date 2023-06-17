@@ -82,7 +82,6 @@ def gen_mask(anno: dict, label_to_idx: Dict[str, int],
         # 取得標籤索引
         label = shape.get('label')
         label_idx = label_to_idx.get(label) or DEFAULT_IDX
-        # label_idx = 255
 
         # 取得輪廓座標點
         points = shape.get('points')
