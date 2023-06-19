@@ -1,7 +1,7 @@
 import cv2
 import numpy as np
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Set, Tuple
 from utils.image_tool import base64_to_img, save_img
 from utils.json_util import load_json
 from utils.text_tool import load_lines
@@ -67,16 +67,24 @@ def gen_mask(anno: dict, label_to_idx: Dict[str, int],
              target_shape: Tuple[int, int], top: int, left: int,
              ratio: float) -> np.ndarray:
 
-    # 1. 取得圖片尺寸
-    height = anno.get('imageHeight')
-    width = anno.get('imageWidth')
+    # 1. 取得圖片資料
+    shapes = anno.get('shapes')
 
-    # 2. 產生Mask
+    # 2. 計算所有標籤種類
+    label_idxs: Set[int] = set()
+    for shape in shapes:
+        label = shape.get('label')
+        label_idx = label_to_idx.get(label) or DEFAULT_IDX
+        label_idxs.add(label_idx)
+
+    # 3. 產生Mask
     # 產生空白影像
-    mask = np.zeros((target_shape[1], target_shape[0], 1), np.uint8)
+    label_to_mask: Dict[str, np.ndarray] = dict()
+    for label_idx in label_idxs:
+        mask = np.zeros((target_shape[1], target_shape[0], 1), np.uint8)
+        label_to_mask[label_idx] = mask
 
     # 繪製標記資料(實心填充輪廓)
-    shapes = anno.get('shapes')
     for shape in shapes:
 
         # 取得標籤索引
@@ -96,9 +104,22 @@ def gen_mask(anno: dict, label_to_idx: Dict[str, int],
 
         # 繪製輪廓
         np_points = np.array(resize_points, np.int32)
-        mask = cv2.drawContours(mask, [np_points], -1, label_idx, -1)
+        mask = label_to_mask.get(label_idx)
+        mask = cv2.drawContours(mask, [np_points],
+                                -1,
+                                255,
+                                -1,
+                                lineType=cv2.LINE_AA)
+        label_to_mask[label_idx] = mask
 
-    return mask
+    # 3. 合併 Mask，將有反鋸齒的地方設為該索引
+    # NOTE: 這裡為了配合表格的水平線與垂直線，有把重疊的地方設定為3，所以背景=0、水平線=1、垂直線=2、重疊部分=3
+    final_mask = np.zeros((target_shape[1], target_shape[0], 1), np.uint8)
+    for label_idx, mask in label_to_mask.items():
+        mask[mask > 0] = label_idx
+        final_mask = final_mask + mask
+
+    return final_mask
 
 
 def anno_to_mask(
